@@ -1,0 +1,126 @@
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hookrelay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hookrelay_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-hookrelay}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    env_file: [docker.env]
+    volumes:
+      - "./migrations:/migrations:ro"
+    command:
+      - "-path"
+      - "/migrations"
+      - "-database"
+      - "postgres://${POSTGRES_USER:-hookrelay}:${POSTGRES_PASSWORD:-hookrelay_dev_password}@postgres:5432/${POSTGRES_DB:-hookrelay}?sslmode=disable"
+      - "up"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hookrelay:local
+    restart: unless-stopped
+    env_file: [docker.env]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hookrelay}:${POSTGRES_PASSWORD:-hookrelay_dev_password}@postgres:5432/${POSTGRES_DB:-hookrelay}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8080"
+      LOG_FILE: ""
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+
+  dispatcher:
+    image: hookrelay:local
+    entrypoint: ["/app/dispatcher"]
+    restart: unless-stopped
+    env_file: [docker.env]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hookrelay}:${POSTGRES_PASSWORD:-hookrelay_dev_password}@postgres:5432/${POSTGRES_DB:-hookrelay}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      LOG_FILE: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      disable: true
+
+  worker:
+    image: hookrelay:local
+    entrypoint: ["/app/worker"]
+    restart: unless-stopped
+    env_file: [docker.env]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hookrelay}:${POSTGRES_PASSWORD:-hookrelay_dev_password}@postgres:5432/${POSTGRES_DB:-hookrelay}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      LOG_FILE: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      disable: true
+
+volumes:
+  postgres_data:
+  redis_data:

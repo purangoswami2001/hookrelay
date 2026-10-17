@@ -1,0 +1,19 @@
+# Environment variables and secrets
+.env
+.env.*
+docker.env
+*.env
+!.env.example
+!.docker.env.example
+
+# Compiled binaries
+bin/
+hookrelay-api
+hookrelay-worker
+hookrelay-dispatcher
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+*.test
