@@ -8,14 +8,17 @@ import (
 )
 
 type DeliveryFilter struct {
-	EventID string
-	Limit   int
-	Offset  int
+	UserID         string
+	EventID        string
+	SubscriptionID string
+	Limit          int
+	Offset         int
 }
 
 type DeliveryRepository interface {
 	Create(ctx context.Context, delivery *domain.Delivery) error
 	GetByID(ctx context.Context, id string) (*domain.Delivery, error)
+	GetByIDAndUser(ctx context.Context, id, userID string) (*domain.Delivery, error)
 	List(ctx context.Context, filter DeliveryFilter) ([]domain.Delivery, error)
 	GetAttempts(ctx context.Context, deliveryID string) ([]domain.DeliveryAttempt, error)
 

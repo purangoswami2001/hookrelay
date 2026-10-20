@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/purangoswami2001/hookrelay/internal/application/events"
+	"github.com/purangoswami2001/hookrelay/internal/domain"
 	"github.com/purangoswami2001/hookrelay/internal/ports"
 )
 
@@ -39,6 +41,12 @@ type createEventRequest struct {
 
 // Create handles POST /api/v1/events
 func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	// 1MB limit
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	defer r.Body.Close()
@@ -77,18 +85,18 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 
-	h.logger.Debug("creating event", "type", req.Type, "idempotency_key", idempotencyKey)
-
-	// traceParent := r.Header.Get("traceparent")
+	h.logger.Debug("creating event", "user_id", user.ID, "type", req.Type, "idempotency_key", idempotencyKey)
 
 	event, err := h.service.Publish(
 		r.Context(),
+		user.ID,
 		req.Type,
 		req.Data,
 		idempotencyKey,
 	)
 	if err != nil {
 		h.logger.Error("publish event failed",
+			"user_id", user.ID,
 			"event_type", req.Type,
 			"error", err,
 		)
@@ -100,17 +108,64 @@ func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, event)
 }
 
-// GetByID handles GET /api/v1/events/{id}
+// List handles GET /api/v1/events (scoped to current user)
+func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+	limit := 50
+	if l := query.Get("limit"); l != "" {
+		if val, err := strconv.Atoi(l); err == nil && val > 0 {
+			limit = min(val, 100)
+		}
+	}
+
+	offset := 0
+	if o := query.Get("offset"); o != "" {
+		if val, err := strconv.Atoi(o); err == nil && val >= 0 {
+			offset = val
+		}
+	}
+
+	h.logger.Debug("listing events", "user_id", user.ID, "limit", limit, "offset", offset)
+
+	eventsList, err := h.repository.ListByUser(r.Context(), user.ID, limit, offset)
+	if err != nil {
+		h.logger.Error("list events failed", "user_id", user.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "could not list events")
+		return
+	}
+
+	if eventsList == nil {
+		eventsList = []domain.Event{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": eventsList,
+	})
+}
+
+// GetByID handles GET /api/v1/events/{id} (scoped to current user)
 func (h *EventHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "event ID is required")
 		return
 	}
 
-	h.logger.Debug("getting event", "id", id)
+	h.logger.Debug("getting event", "user_id", user.ID, "id", id)
 
-	event, err := h.repository.GetByID(r.Context(), id)
+	event, err := h.repository.GetByIDAndUser(r.Context(), id, user.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) ||
 			strings.Contains(err.Error(), "not found") ||
@@ -121,6 +176,7 @@ func (h *EventHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 		h.logger.Error("get event failed",
 			"event_id", id,
+			"user_id", user.ID,
 			"error", err,
 		)
 

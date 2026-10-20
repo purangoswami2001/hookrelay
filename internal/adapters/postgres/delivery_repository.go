@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,18 +29,20 @@ func (r *DeliveryRepository) Create(
 ) error {
 	query := `
 		INSERT INTO deliveries (
+			user_id,
 			event_id,
 			subscription_id,
 			status,
 			attempt_count
 		)
-		VALUES ($1, $2, $3, $4)
+		VALUES (NULLIF($1, '')::uuid, $2, $3, $4, $5)
 		RETURNING id::text, created_at, updated_at
 	`
 
 	err := r.db.QueryRow(
 		ctx,
 		query,
+		delivery.UserID,
 		delivery.EventID,
 		delivery.SubscriptionID,
 		delivery.Status,
@@ -64,6 +67,7 @@ func (r *DeliveryRepository) GetByID(
 	query := `
 		SELECT
 			id::text,
+			COALESCE(user_id::text, ''),
 			event_id::text,
 			subscription_id::text,
 			status,
@@ -82,6 +86,7 @@ func (r *DeliveryRepository) GetByID(
 
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&d.ID,
+		&d.UserID,
 		&d.EventID,
 		&d.SubscriptionID,
 		&d.Status,
@@ -113,6 +118,65 @@ func (r *DeliveryRepository) GetByID(
 	return &d, nil
 }
 
+func (r *DeliveryRepository) GetByIDAndUser(
+	ctx context.Context,
+	id string,
+	userID string,
+) (*domain.Delivery, error) {
+	query := `
+		SELECT
+			id::text,
+			COALESCE(user_id::text, ''),
+			event_id::text,
+			subscription_id::text,
+			status,
+			attempt_count,
+			next_attempt_at,
+			COALESCE(last_http_status, 0),
+			COALESCE(last_error, ''),
+			created_at,
+			updated_at
+		FROM deliveries
+		WHERE id = $1 AND user_id = $2
+	`
+
+	var d domain.Delivery
+	var nextAttempt pgtype.Timestamptz
+
+	err := r.db.QueryRow(ctx, query, id, userID).Scan(
+		&d.ID,
+		&d.UserID,
+		&d.EventID,
+		&d.SubscriptionID,
+		&d.Status,
+		&d.AttemptCount,
+		&nextAttempt,
+		&d.LastHTTPStatus,
+		&d.LastError,
+		&d.CreatedAt,
+		&d.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: delivery %s not found", pgx.ErrNoRows, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get delivery by user: %w", err)
+	}
+
+	if nextAttempt.Valid {
+		d.NextAttemptAt = &nextAttempt.Time
+	}
+
+	// load attempt logs
+	attempts, err := r.GetAttempts(ctx, id)
+	if err == nil && len(attempts) > 0 {
+		d.Attempts = attempts
+	}
+
+	return &d, nil
+}
+
 func (r *DeliveryRepository) List(
 	ctx context.Context,
 	filter ports.DeliveryFilter,
@@ -127,9 +191,32 @@ func (r *DeliveryRepository) List(
 		offset = 0
 	}
 
-	baseQuery := `
+	var conditions []string
+	var args []any
+	argIndex := 1
+
+	if filter.UserID != "" {
+		conditions = append(conditions, fmt.Sprintf("user_id = $%d", argIndex))
+		args = append(args, filter.UserID)
+		argIndex++
+	}
+
+	if filter.EventID != "" {
+		conditions = append(conditions, fmt.Sprintf("event_id = $%d", argIndex))
+		args = append(args, filter.EventID)
+		argIndex++
+	}
+
+	if filter.SubscriptionID != "" {
+		conditions = append(conditions, fmt.Sprintf("subscription_id = $%d", argIndex))
+		args = append(args, filter.SubscriptionID)
+		argIndex++
+	}
+
+	query := `
 		SELECT
 			id::text,
+			COALESCE(user_id::text, ''),
 			event_id::text,
 			subscription_id::text,
 			status,
@@ -142,25 +229,14 @@ func (r *DeliveryRepository) List(
 		FROM deliveries
 	`
 
-	var (
-		rows pgx.Rows
-		err  error
-	)
-
-	if filter.EventID != "" {
-		query := baseQuery + `
-		WHERE event_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-		`
-		rows, err = r.db.Query(ctx, query, filter.EventID, limit, offset)
-	} else {
-		query := baseQuery + `
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-		`
-		rows, err = r.db.Query(ctx, query, limit, offset)
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
+
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIndex, argIndex+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list deliveries: %w", err)
 	}
@@ -174,6 +250,7 @@ func (r *DeliveryRepository) List(
 
 		if err := rows.Scan(
 			&d.ID,
+			&d.UserID,
 			&d.EventID,
 			&d.SubscriptionID,
 			&d.Status,

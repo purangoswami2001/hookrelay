@@ -28,6 +28,7 @@ func NewService(
 
 func (s *Service) Publish(
 	ctx context.Context,
+	userID string,
 	eventType string,
 	payload json.RawMessage,
 	idempotencyKey string,
@@ -52,12 +53,10 @@ func (s *Service) Publish(
 		return nil, fmt.Errorf("idempotency key cannot exceed 200 characters")
 	}
 
-	s.logger.Debug("publishing event", "type", eventType, "has_idempotency_key", idempotencyKey != "")
-
-	// schema validation hook:
-	// if err := validateSchema(eventType, payload); err != nil { return nil, err }
+	s.logger.Debug("publishing event", "user_id", userID, "type", eventType, "has_idempotency_key", idempotencyKey != "")
 
 	event := &domain.Event{
+		UserID:         userID,
 		EventType:      eventType,
 		Payload:        payload,
 		IdempotencyKey: idempotencyKey,
@@ -66,6 +65,7 @@ func (s *Service) Publish(
 	if err := s.publisher.Publish(ctx, event); err != nil {
 		s.logger.Error(
 			"event publishing failed",
+			"user_id", userID,
 			"event_type", eventType,
 			"error", err,
 		)
@@ -75,6 +75,7 @@ func (s *Service) Publish(
 	s.logger.Info(
 		"event published",
 		"event_id", event.ID,
+		"user_id", event.UserID,
 		"event_type", event.EventType,
 	)
 

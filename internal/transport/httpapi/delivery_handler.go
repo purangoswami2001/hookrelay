@@ -27,10 +27,17 @@ func NewDeliveryHandler(
 	}
 }
 
-// List handles GET /api/v1/deliveries (?event_id=...&limit=...&offset=...)
+// List handles GET /api/v1/deliveries (?event_id=...&subscription_id=...&limit=...&offset=...) scoped to current user
 func (h *DeliveryHandler) List(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	query := r.URL.Query()
 	eventID := strings.TrimSpace(query.Get("event_id"))
+	subscriptionID := strings.TrimSpace(query.Get("subscription_id"))
 
 	// clamp limit between 1 and 100
 	limit := 50
@@ -47,22 +54,22 @@ func (h *DeliveryHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.logger.Debug("listing deliveries", "event_id", eventID, "limit", limit, "offset", offset)
-
-	// status := query.Get("status")
+	h.logger.Debug("listing deliveries", "user_id", user.ID, "event_id", eventID, "subscription_id", subscriptionID, "limit", limit, "offset", offset)
 
 	deliveries, err := h.repository.List(r.Context(), ports.DeliveryFilter{
-		EventID: eventID,
-		Limit:   limit,
-		Offset:  offset,
+		UserID:         user.ID,
+		EventID:        eventID,
+		SubscriptionID: subscriptionID,
+		Limit:          limit,
+		Offset:         offset,
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid input syntax for type uuid") {
-			writeError(w, http.StatusBadRequest, "invalid event_id format")
+			writeError(w, http.StatusBadRequest, "invalid UUID format in query filter")
 			return
 		}
 
-		h.logger.Error("list deliveries failed", "error", err)
+		h.logger.Error("list deliveries failed", "user_id", user.ID, "error", err)
 		writeError(w, http.StatusInternalServerError, "could not list deliveries")
 		return
 	}
@@ -76,17 +83,23 @@ func (h *DeliveryHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetByID handles GET /api/v1/deliveries/{id}
+// GetByID handles GET /api/v1/deliveries/{id} scoped to current user
 func (h *DeliveryHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "delivery ID is required")
 		return
 	}
 
-	h.logger.Debug("getting delivery", "id", id)
+	h.logger.Debug("getting delivery", "user_id", user.ID, "id", id)
 
-	delivery, err := h.repository.GetByID(r.Context(), id)
+	delivery, err := h.repository.GetByIDAndUser(r.Context(), id, user.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) ||
 			strings.Contains(err.Error(), "not found") ||
@@ -97,6 +110,7 @@ func (h *DeliveryHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 		h.logger.Error("failed to get delivery",
 			"delivery_id", id,
+			"user_id", user.ID,
 			"error", err,
 		)
 		writeError(w, http.StatusInternalServerError, "could not retrieve delivery")

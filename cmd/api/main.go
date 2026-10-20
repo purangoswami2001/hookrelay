@@ -13,6 +13,7 @@ import (
 	"github.com/purangoswami2001/hookrelay/internal/adapters/postgres"
 	"github.com/purangoswami2001/hookrelay/internal/application/events"
 	"github.com/purangoswami2001/hookrelay/internal/application/subscriptions"
+	"github.com/purangoswami2001/hookrelay/internal/application/users"
 	"github.com/purangoswami2001/hookrelay/internal/config"
 	"github.com/purangoswami2001/hookrelay/internal/observability"
 	"github.com/purangoswami2001/hookrelay/internal/transport/httpapi"
@@ -61,6 +62,9 @@ func run() error {
 
 	logger.Debug("db connected", "conns", db.Stat().TotalConns())
 
+	userRepository := postgres.NewUserRepository(db)
+	userService := users.NewService(userRepository, logger)
+
 	eventRepository := postgres.NewEventRepository(db)
 	eventService := events.NewService(eventRepository, logger)
 	deliveryRepository := postgres.NewDeliveryRepository(db)
@@ -72,6 +76,7 @@ func run() error {
 	)
 
 	router := httpapi.NewRouter(
+		userService,
 		eventService,
 		eventRepository,
 		subscriptionService,

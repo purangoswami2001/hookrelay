@@ -14,6 +14,7 @@ const (
 
 type Delivery struct {
 	ID             string            `json:"id"`
+	UserID         string            `json:"user_id,omitempty"`
 	EventID        string            `json:"event_id"`
 	SubscriptionID string            `json:"subscription_id"`
 	Status         DeliveryStatus    `json:"status"`

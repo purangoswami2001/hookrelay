@@ -44,7 +44,7 @@ func (s *Service) Create(
 	subscription.URL = strings.TrimSpace(subscription.URL)
 	subscription.Active = true
 
-	s.logger.Debug("saving subscription", "url", subscription.URL, "events", subscription.EventTypes)
+	s.logger.Debug("saving subscription", "user_id", subscription.UserID, "url", subscription.URL, "events", subscription.EventTypes)
 
 	if err := s.repository.Create(ctx, subscription); err != nil {
 		s.logger.Error("create subscription failed", "error", err)
@@ -54,6 +54,7 @@ func (s *Service) Create(
 	s.logger.Info(
 		"subscription created",
 		"subscription_id", subscription.ID,
+		"user_id", subscription.UserID,
 		"active", subscription.Active,
 	)
 
@@ -72,10 +73,33 @@ func (s *Service) GetByID(
 	return s.repository.GetByID(ctx, id)
 }
 
-func (s *Service) List(
+func (s *Service) GetByIDAndUser(
 	ctx context.Context,
+	id string,
+	userID string,
+) (*domain.Subscription, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("%w: ID is required", ErrInvalidSubscription)
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("%w: user ID is required", ErrInvalidSubscription)
+	}
+
+	return s.repository.GetByIDAndUser(ctx, id, userID)
+}
+
+func (s *Service) ListByUser(
+	ctx context.Context,
+	userID string,
 ) ([]domain.Subscription, error) {
-	return s.repository.List(ctx)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("%w: user ID is required", ErrInvalidSubscription)
+	}
+
+	return s.repository.ListByUser(ctx, userID)
 }
 
 func (s *Service) Update(
@@ -89,6 +113,9 @@ func (s *Service) Update(
 	if strings.TrimSpace(subscription.ID) == "" {
 		return fmt.Errorf("%w: ID is required", ErrInvalidSubscription)
 	}
+	if strings.TrimSpace(subscription.UserID) == "" {
+		return fmt.Errorf("%w: user ID is required", ErrInvalidSubscription)
+	}
 
 	if err := validateSubscription(subscription); err != nil {
 		return err
@@ -96,27 +123,31 @@ func (s *Service) Update(
 
 	subscription.URL = strings.TrimSpace(subscription.URL)
 
-	s.logger.Debug("updating subscription", "id", subscription.ID, "active", subscription.Active)
+	s.logger.Debug("updating subscription", "id", subscription.ID, "user_id", subscription.UserID, "active", subscription.Active)
 
 	if err := s.repository.Update(ctx, subscription); err != nil {
 		return fmt.Errorf("update subscription: %w", err)
 	}
 
-	s.logger.Info("subscription updated", "subscription_id", subscription.ID)
+	s.logger.Info("subscription updated", "subscription_id", subscription.ID, "user_id", subscription.UserID)
 	return nil
 }
 
-func (s *Service) Delete(ctx context.Context, id string) error {
+func (s *Service) Delete(ctx context.Context, id string, userID string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("%w: ID is required", ErrInvalidSubscription)
 	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("%w: user ID is required", ErrInvalidSubscription)
+	}
 
-	if err := s.repository.Delete(ctx, id); err != nil {
+	if err := s.repository.Delete(ctx, id, userID); err != nil {
 		return fmt.Errorf("delete subscription: %w", err)
 	}
 
-	s.logger.Info("subscription deleted", "subscription_id", id)
+	s.logger.Info("subscription deleted", "subscription_id", id, "user_id", userID)
 	return nil
 }
 
@@ -131,9 +162,6 @@ func validateSubscription(subscription *domain.Subscription) error {
 		parsedURL.User != nil {
 		return fmt.Errorf("%w: URL must be an HTTP or HTTPS URL without credentials", ErrInvalidSubscription)
 	}
-
-	// SSRF check option:
-	// if isPrivateIP(parsedURL.Hostname()) { return errors.New("cannot subscribe to private network") }
 
 	if len(subscription.EventTypes) == 0 {
 		return fmt.Errorf("%w: at least one event type is required", ErrInvalidSubscription)
