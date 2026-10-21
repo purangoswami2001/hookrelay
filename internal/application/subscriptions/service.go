@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 
+	"github.com/purangoswami2001/hookrelay/internal/adapters/httpclient"
 	"github.com/purangoswami2001/hookrelay/internal/domain"
 	"github.com/purangoswami2001/hookrelay/internal/ports"
 )
@@ -161,6 +163,16 @@ func validateSubscription(subscription *domain.Subscription) error {
 		parsedURL.Hostname() == "" ||
 		parsedURL.User != nil {
 		return fmt.Errorf("%w: URL must be an HTTP or HTTPS URL without credentials", ErrInvalidSubscription)
+	}
+
+	host := parsedURL.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("%w: cannot subscribe to localhost or loopback addresses", ErrInvalidSubscription)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if httpclient.IsBlockedIP(ip) {
+			return fmt.Errorf("%w: cannot subscribe to private or restricted IP address %s", ErrInvalidSubscription, ip)
+		}
 	}
 
 	if len(subscription.EventTypes) == 0 {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/purangoswami2001/hookrelay/internal/adapters/httpclient"
 	"github.com/purangoswami2001/hookrelay/internal/domain"
+	"github.com/purangoswami2001/hookrelay/internal/observability"
 	"github.com/purangoswami2001/hookrelay/internal/ports"
 )
 
@@ -17,6 +18,7 @@ type Service struct {
 	events        ports.EventRepository
 	subscriptions ports.SubscriptionRepository
 	sender        ports.WebhookSender
+	queue         ports.Queue
 	logger        *slog.Logger
 }
 
@@ -25,6 +27,7 @@ func NewService(
 	eventRepo ports.EventRepository,
 	subscriptionRepo ports.SubscriptionRepository,
 	sender ports.WebhookSender,
+	queue ports.Queue,
 	logger *slog.Logger,
 ) *Service {
 	return &Service{
@@ -32,6 +35,7 @@ func NewService(
 		events:        eventRepo,
 		subscriptions: subscriptionRepo,
 		sender:        sender,
+		queue:         queue,
 		logger:        logger,
 	}
 }
@@ -128,6 +132,8 @@ func (s *Service) Process(
 		return fmt.Errorf("record delivery attempt: %w", err)
 	}
 
+	observability.DeliveryAttemptsTotal.WithLabelValues(fmt.Sprint(statusCode)).Inc()
+
 	// 2xx = success
 	if sendErr == nil && statusCode >= 200 && statusCode < 300 {
 		if err := s.deliveries.MarkDelivered(ctx, delivery.ID, statusCode); err != nil {
@@ -141,9 +147,12 @@ func (s *Service) Process(
 			"duration_ms", duration,
 		)
 
-		// metrics.DeliveriesSucceeded.Inc()
+		observability.DeliveriesTotal.WithLabelValues("delivered").Inc()
+		observability.DeliveryDurationSeconds.WithLabelValues("success").Observe(float64(duration) / 1000.0)
 		return nil
 	}
+
+	observability.DeliveryDurationSeconds.WithLabelValues("failure").Observe(float64(duration) / 1000.0)
 
 	reason := fmt.Sprintf("HTTP status %d", statusCode)
 	if sendErr != nil {
@@ -166,6 +175,18 @@ func (s *Service) Process(
 	); err != nil {
 		return fmt.Errorf("schedule retry: %w", err)
 	}
+
+	if s.queue != nil {
+		if err := s.queue.EnqueueScheduled(ctx, delivery.ID, nextAttempt); err != nil {
+			s.logger.Error(
+				"failed to enqueue delivery in delayed queue",
+				"delivery_id", delivery.ID,
+				"error", err,
+			)
+		}
+	}
+
+	observability.DeliveriesTotal.WithLabelValues("retry_waiting").Inc()
 
 	s.logger.Warn(
 		"webhook delivery scheduled for retry",
@@ -193,6 +214,8 @@ func (s *Service) failPermanently(
 		return fmt.Errorf("mark delivery dead letter: %w", err)
 	}
 
+	observability.DeliveriesTotal.WithLabelValues("dead_letter").Inc()
+
 	s.logger.Error(
 		"webhook delivery moved to dead letter",
 		"delivery_id", delivery.ID,
@@ -201,3 +224,41 @@ func (s *Service) failPermanently(
 
 	return nil
 }
+
+// Retry resets a dead-lettered or waiting delivery and immediately queues it for redelivery
+func (s *Service) Retry(ctx context.Context, id, userID string) error {
+	if err := s.deliveries.ResetForRetry(ctx, id, userID); err != nil {
+		return err
+	}
+
+	if s.queue != nil {
+		if err := s.queue.Enqueue(ctx, id); err != nil {
+			return fmt.Errorf("enqueue retried delivery: %w", err)
+		}
+	}
+
+	observability.DeliveriesReplayedTotal.Inc()
+	s.logger.Info("delivery reset and enqueued for retry", "delivery_id", id, "user_id", userID)
+	return nil
+}
+
+// Replay dead-letter deliveries matching filter criteria in batch
+func (s *Service) Replay(ctx context.Context, filter ports.ReplayFilter) ([]string, error) {
+	replayedIDs, err := s.deliveries.ReplayDeadLetters(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.queue != nil {
+		for _, id := range replayedIDs {
+			if err := s.queue.Enqueue(ctx, id); err != nil {
+				s.logger.Error("failed to enqueue replayed delivery", "delivery_id", id, "error", err)
+			}
+		}
+	}
+
+	observability.DeliveriesReplayedTotal.Add(float64(len(replayedIDs)))
+	s.logger.Info("replayed dead-letter deliveries", "user_id", filter.UserID, "count", len(replayedIDs))
+	return replayedIDs, nil
+}
+

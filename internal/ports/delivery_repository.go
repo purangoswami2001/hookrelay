@@ -15,6 +15,13 @@ type DeliveryFilter struct {
 	Offset         int
 }
 
+type ReplayFilter struct {
+	UserID         string
+	EventID        string
+	SubscriptionID string
+	Limit          int
+}
+
 type DeliveryRepository interface {
 	Create(ctx context.Context, delivery *domain.Delivery) error
 	GetByID(ctx context.Context, id string) (*domain.Delivery, error)
@@ -32,6 +39,9 @@ type DeliveryRepository interface {
 		reason string,
 	) error
 	MarkDeadLetter(ctx context.Context, id string, statusCode int, reason string) error
+	ResetForRetry(ctx context.Context, id string, userID string) error
+	ReplayDeadLetters(ctx context.Context, filter ReplayFilter) ([]string, error)
 
 	RecordAttempt(ctx context.Context, attempt *domain.DeliveryAttempt) error
 }
+

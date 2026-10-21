@@ -78,6 +78,7 @@ func run() error {
 		eventRepository,
 		subscriptionRepository,
 		sender,
+		queue,
 		logger,
 	)
 

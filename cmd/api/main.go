@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/purangoswami2001/hookrelay/internal/adapters/postgres"
+	redisadapter "github.com/purangoswami2001/hookrelay/internal/adapters/redis"
+	"github.com/purangoswami2001/hookrelay/internal/application/deliveries"
 	"github.com/purangoswami2001/hookrelay/internal/application/events"
 	"github.com/purangoswami2001/hookrelay/internal/application/subscriptions"
 	"github.com/purangoswami2001/hookrelay/internal/application/users"
@@ -62,6 +64,9 @@ func run() error {
 
 	logger.Debug("db connected", "conns", db.Stat().TotalConns())
 
+	queue := redisadapter.NewQueue(cfg.RedisAddr)
+	defer queue.Close()
+
 	userRepository := postgres.NewUserRepository(db)
 	userService := users.NewService(userRepository, logger)
 
@@ -75,11 +80,21 @@ func run() error {
 		logger,
 	)
 
+	deliveryService := deliveries.NewService(
+		deliveryRepository,
+		eventRepository,
+		subscriptionRepository,
+		nil,
+		queue,
+		logger,
+	)
+
 	router := httpapi.NewRouter(
 		userService,
 		eventService,
 		eventRepository,
 		subscriptionService,
+		deliveryService,
 		deliveryRepository,
 		logger,
 	)

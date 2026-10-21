@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/purangoswami2001/hookrelay/internal/application/deliveries"
 	"github.com/purangoswami2001/hookrelay/internal/application/events"
 	"github.com/purangoswami2001/hookrelay/internal/application/subscriptions"
 	"github.com/purangoswami2001/hookrelay/internal/application/users"
@@ -167,6 +168,12 @@ func (m *mockDeliveryRepo) ScheduleRetry(ctx context.Context, id string, nextAtt
 func (m *mockDeliveryRepo) MarkDeadLetter(ctx context.Context, id string, statusCode int, reason string) error {
 	return nil
 }
+func (m *mockDeliveryRepo) ResetForRetry(ctx context.Context, id string, userID string) error {
+	return nil
+}
+func (m *mockDeliveryRepo) ReplayDeadLetters(ctx context.Context, filter ports.ReplayFilter) ([]string, error) {
+	return []string{}, nil
+}
 func (m *mockDeliveryRepo) RecordAttempt(ctx context.Context, attempt *domain.DeliveryAttempt) error {
 	return nil
 }
@@ -186,12 +193,14 @@ func setupTestServer() (http.Handler, *users.Service) {
 	eventService := events.NewService(eventRepo, logger)
 
 	deliveryRepo := &mockDeliveryRepo{}
+	deliveryService := deliveries.NewService(deliveryRepo, eventRepo, subRepo, nil, nil, logger)
 
 	router := httpapi.NewRouter(
 		userService,
 		eventService,
 		eventRepo,
 		subService,
+		deliveryService,
 		deliveryRepo,
 		logger,
 	)
@@ -303,4 +312,44 @@ func TestRouter_AuthAndTenantScoping(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with new key, got %d", rec.Code)
 	}
+
+	// 10. Prometheus metrics endpoint
+	req = httptest.NewRequest("GET", "/metrics", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /metrics, got %d", rec.Code)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("hookrelay_")) {
+		t.Fatalf("expected /metrics to include hookrelay metrics")
+	}
+
+	// 11. Delivery retry endpoint (unauthorized without key)
+	req = httptest.NewRequest("POST", "/api/v1/deliveries/del-1/retry", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated retry, got %d", rec.Code)
+	}
+
+	// 12. Delivery retry with key
+	req = httptest.NewRequest("POST", "/api/v1/deliveries/del-1/retry", nil)
+	req.Header.Set("Authorization", "Bearer "+newKey)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for authenticated retry, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 13. Delivery replay with key
+	replayBody := `{"limit": 10}`
+	req = httptest.NewRequest("POST", "/api/v1/deliveries/replay", bytes.NewReader([]byte(replayBody)))
+	req.Header.Set("Authorization", "Bearer "+newKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for authenticated replay, got %d: %s", rec.Code, rec.Body.String())
+	}
 }
+

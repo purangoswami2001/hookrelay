@@ -409,6 +409,86 @@ func (r *DeliveryRepository) MarkDeadLetter(
 	return nil
 }
 
+func (r *DeliveryRepository) ResetForRetry(
+	ctx context.Context,
+	id string,
+	userID string,
+) error {
+	query := `
+		UPDATE deliveries
+		SET
+			status = 'pending',
+			next_attempt_at = NULL,
+			last_error = NULL,
+			updated_at = NOW()
+		WHERE id = $1 AND user_id = $2
+		  AND status IN ('dead_letter', 'retry_waiting')
+	`
+
+	tag, err := r.db.Exec(ctx, query, id, userID)
+	if err != nil {
+		return fmt.Errorf("reset delivery for retry: %w", err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("delivery %s not found or not eligible for retry", id)
+	}
+
+	return nil
+}
+
+func (r *DeliveryRepository) ReplayDeadLetters(
+	ctx context.Context,
+	filter ports.ReplayFilter,
+) ([]string, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	query := `
+		UPDATE deliveries
+		SET
+			status = 'pending',
+			next_attempt_at = NULL,
+			last_error = NULL,
+			updated_at = NOW()
+		WHERE id IN (
+			SELECT id
+			FROM deliveries
+			WHERE user_id = $1
+			  AND status = 'dead_letter'
+			  AND ($2 = '' OR subscription_id = $2::uuid)
+			  AND ($3 = '' OR event_id = $3::uuid)
+			ORDER BY created_at DESC
+			LIMIT $4
+		)
+		RETURNING id::text
+	`
+
+	rows, err := r.db.Query(ctx, query, filter.UserID, filter.SubscriptionID, filter.EventID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("replay dead letters: %w", err)
+	}
+	defer rows.Close()
+
+	var replayedIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan replayed delivery id: %w", err)
+		}
+		replayedIDs = append(replayedIDs, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate replayed deliveries: %w", err)
+	}
+
+	return replayedIDs, nil
+}
+
+
 func (r *DeliveryRepository) RecordAttempt(
 	ctx context.Context,
 	attempt *domain.DeliveryAttempt,

@@ -1,0 +1,647 @@
+{
+	"info": {
+		"_postman_id": "c1f72a44-8a7e-4d56-a199-98319fbc7412",
+		"name": "HookRelay API Collection",
+		"description": "Production-grade Webhook Delivery and Event Routing Engine with Transactional Outbox, HMAC-SHA256 signatures, API Key multi-tenancy, and exponential retry backoff.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{apiKey}}",
+				"type": "string"
+			}
+		]
+	},
+	"item": [
+		{
+			"name": "0. Health & Observability",
+			"item": [
+				{
+					"name": "Check Health",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"health"
+							]
+						},
+						"description": "Public health check endpoint. Returns service status and healthy state for container probes and load balancers."
+					},
+					"response": []
+				},
+				{
+					"name": "Prometheus Metrics",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/metrics",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"metrics"
+							]
+						},
+						"description": "Exposes standard Prometheus scrape endpoint containing hookrelay_events_published_total, hookrelay_deliveries_total, hookrelay_delivery_duration_seconds, and hookrelay_delivery_attempts_total."
+					},
+					"response": []
+				}
+			],
+			"description": "System health checks and Prometheus metrics scrape endpoint."
+		},
+		{
+			"name": "1. Users & Authentication",
+			"item": [
+				{
+					"name": "Register User",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var data = pm.response.json();",
+									"    if (data.api_key) {",
+									"        pm.environment.set(\"apiKey\", data.api_key);",
+									"        console.log(\"Auto-saved apiKey to environment: \" + data.api_key);",
+									"    }",
+									"    if (data.user && data.user.id) {",
+									"        pm.environment.set(\"userId\", data.user.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"customer@example.com\",\n  \"name\": \"Acme Corporation\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/users/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"users",
+								"register"
+							]
+						},
+						"description": "Registers a new customer account and generates a high-entropy API key. The unhashed raw API key is returned only once in this response and automatically stored in the {{apiKey}} environment variable."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Current User Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/users/me",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"users",
+								"me"
+							]
+						},
+						"description": "Retrieves the authenticated user profile (ID, name, email, API key prefix, created_at, updated_at). Requires Bearer token."
+					},
+					"response": []
+				},
+				{
+					"name": "Regenerate API Key",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var data = pm.response.json();",
+									"    if (data.api_key) {",
+									"        pm.environment.set(\"apiKey\", data.api_key);",
+									"        console.log(\"Auto-updated apiKey in environment: \" + data.api_key);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/users/me/regenerate-key",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"users",
+								"me",
+								"regenerate-key"
+							]
+						},
+						"description": "Immediately invalidates and terminates the current API key and generates a new one. The new key is automatically saved to the {{apiKey}} environment variable."
+					},
+					"response": []
+				}
+			],
+			"description": "Customer onboarding, user profile, and API key management endpoints."
+		},
+		{
+			"name": "2. Subscriptions",
+			"item": [
+				{
+					"name": "Create Subscription",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var data = pm.response.json();",
+									"    if (data.subscription && data.subscription.id) {",
+									"        pm.environment.set(\"subscriptionId\", data.subscription.id);",
+									"        console.log(\"Auto-saved subscriptionId: \" + data.subscription.id);",
+									"    }",
+									"    if (data.secret) {",
+									"        pm.environment.set(\"subscriptionSecret\", data.secret);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"url\": \"https://webhook.site/#!/view/sample-endpoint\",\n  \"event_types\": [\n    \"payment.succeeded\",\n    \"invoice.created\",\n    \"order.placed\"\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/subscriptions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"subscriptions"
+							]
+						},
+						"description": "Creates a webhook subscription tied to the authenticated user. Generates a 32-byte secret for HMAC-SHA256 signature verification and auto-stores {{subscriptionId}} in environment."
+					},
+					"response": []
+				},
+				{
+					"name": "List Subscriptions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/subscriptions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"subscriptions"
+							]
+						},
+						"description": "Returns all active and inactive webhook subscriptions belonging strictly to the authenticated user."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Subscription by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/subscriptions/{{subscriptionId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"subscriptions",
+								"{{subscriptionId}}"
+							]
+						},
+						"description": "Fetches a single subscription by ID. Enforces tenant ownership (returns 404 if not owned by authenticated user)."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Subscription",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"url\": \"https://webhook.site/#!/view/updated-endpoint\",\n  \"event_types\": [\n    \"payment.succeeded\",\n    \"payment.failed\"\n  ],\n  \"active\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/subscriptions/{{subscriptionId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"subscriptions",
+								"{{subscriptionId}}"
+							]
+						},
+						"description": "Partially updates an existing subscription (URL, event_types, or active status). Scoped to authenticated user."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Subscription",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/subscriptions/{{subscriptionId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"subscriptions",
+								"{{subscriptionId}}"
+							]
+						},
+						"description": "Permanently deletes a subscription. Returns 204 No Content on success."
+					},
+					"response": []
+				}
+			],
+			"description": "Webhook endpoint destinations management."
+		},
+		{
+			"name": "3. Events",
+			"item": [
+				{
+					"name": "Publish Event",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var data = pm.response.json();",
+									"    if (data.id) {",
+									"        pm.environment.set(\"eventId\", data.id);",
+									"        console.log(\"Auto-saved eventId: \" + data.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Idempotency-Key",
+								"value": "pay_req_{{$timestamp}}",
+								"description": "Optional unique key preventing duplicate event ingestion"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"payment.succeeded\",\n  \"data\": {\n    \"order_id\": \"ord_{{$timestamp}}\",\n    \"amount\": 99.50,\n    \"currency\": \"USD\",\n    \"customer\": {\n      \"id\": \"cust_882\",\n      \"email\": \"customer@example.com\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/events",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"events"
+							]
+						},
+						"description": "Ingests an event under the authenticated user. In a single atomic PostgreSQL transaction, matches active subscriptions owned by this user, creates pending deliveries, and inserts outbox entries for Redis streaming."
+					},
+					"response": []
+				},
+				{
+					"name": "List Events",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/events?limit=50&offset=0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"events"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "50",
+									"description": "Items per page (max 100)"
+								},
+								{
+									"key": "offset",
+									"value": "0",
+									"description": "Pagination offset"
+								}
+							]
+						},
+						"description": "Lists historical events published by the authenticated user in reverse chronological order."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Event by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/events/{{eventId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"events",
+								"{{eventId}}"
+							]
+						},
+						"description": "Retrieves an event by its UUID. Enforces tenant ownership."
+					},
+					"response": []
+				}
+			],
+			"description": "Event publishing and historical query endpoints."
+		},
+		{
+			"name": "4. Deliveries",
+			"item": [
+				{
+					"name": "List All Deliveries",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var data = pm.response.json();",
+									"    if (data.data && data.data.length > 0) {",
+									"        pm.environment.set(\"deliveryId\", data.data[0].id);",
+									"        console.log(\"Auto-saved latest deliveryId: \" + data.data[0].id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries?limit=50&offset=0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "50"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Lists all deliveries for the authenticated user, automatically saving the first delivery's ID to {{deliveryId}}."
+					},
+					"response": []
+				},
+				{
+					"name": "Filter Deliveries by Event ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries?event_id={{eventId}}&limit=50&offset=0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries"
+							],
+							"query": [
+								{
+									"key": "event_id",
+									"value": "{{eventId}}",
+									"description": "Filter by specific event UUID"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Retrieves all webhook deliveries triggered by a specific event UUID."
+					},
+					"response": []
+				},
+				{
+					"name": "Filter Deliveries by Subscription ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries?subscription_id={{subscriptionId}}&limit=50&offset=0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries"
+							],
+							"query": [
+								{
+									"key": "subscription_id",
+									"value": "{{subscriptionId}}",
+									"description": "Filter by target subscription UUID"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Retrieves all webhook deliveries targeted at a specific subscription."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Delivery Details & Attempt Logs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries/{{deliveryId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries",
+								"{{deliveryId}}"
+							]
+						},
+						"description": "Retrieves full execution details for a delivery, including status (pending, processing, delivered, retry_waiting, dead_letter), attempt count, next attempt time, and the complete audit trail of HTTP attempts with status codes, response durations, and errors."
+					},
+					"response": []
+				},
+				{
+					"name": "Retry Delivery (DLQ Redelivery)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries/{{deliveryId}}/retry",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries",
+								"{{deliveryId}}",
+								"retry"
+							]
+						},
+						"description": "Manually resets a failed or dead-letter delivery back to pending and immediately enqueues it for redelivery."
+					},
+					"response": []
+				},
+				{
+					"name": "Batch Replay Dead Letters",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"subscription_id\": \"{{subscriptionId}}\",\n  \"limit\": 50\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/deliveries/replay",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"deliveries",
+								"replay"
+							]
+						},
+						"description": "Bulk replays dead-letter deliveries matching optional subscription_id or event_id filters, resetting them to pending and pushing them to the delivery queue."
+					},
+					"response": []
+				}
+			],
+			"description": "Webhook execution tracking, attempt audit trails, and DLQ replay."
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080",
+			"type": "string"
+		}
+	]
+}

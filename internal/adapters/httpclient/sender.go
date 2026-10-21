@@ -14,9 +14,14 @@ type Sender struct {
 }
 
 func NewSender(timeout time.Duration) *Sender {
+	return NewSenderWithOptions(timeout, false)
+}
+
+func NewSenderWithOptions(timeout time.Duration, allowPrivateIPs bool) *Sender {
 	return &Sender{
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: NewSafeTransport(timeout, allowPrivateIPs),
 			// don't follow redirects to prevent leaking signed payloads
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse

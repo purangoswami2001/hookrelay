@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/purangoswami2001/hookrelay/internal/observability"
 	"github.com/purangoswami2001/hookrelay/internal/ports"
 )
 
@@ -55,6 +56,14 @@ func (d *OutboxDispatcher) Run(ctx context.Context) {
 
 func (d *OutboxDispatcher) DispatchBatch(ctx context.Context) error {
 	d.logger.Debug("polling outbox", "batch_size", d.batchSize)
+
+	// Promote delayed deliveries due for retry into the active queue
+	if promoted, err := d.queue.PromoteDue(ctx); err != nil {
+		d.logger.Error("failed to promote scheduled deliveries", "error", err)
+	} else if promoted > 0 {
+		observability.ScheduledPromotionsTotal.Add(float64(promoted))
+		d.logger.Info("promoted scheduled deliveries to active queue", "count", promoted)
+	}
 
 	records, err := d.repository.ListUnpublished(ctx, d.batchSize)
 	if err != nil {

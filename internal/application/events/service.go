@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/purangoswami2001/hookrelay/internal/domain"
+	"github.com/purangoswami2001/hookrelay/internal/observability"
 	"github.com/purangoswami2001/hookrelay/internal/ports"
 )
 
@@ -78,6 +79,8 @@ func (s *Service) Publish(
 		"user_id", event.UserID,
 		"event_type", event.EventType,
 	)
+
+	observability.EventsPublishedTotal.WithLabelValues(event.EventType).Inc()
 
 	return event, nil
 }
