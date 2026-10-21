@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/purangoswami2001/hookrelay/internal/adapters/postgres"
 	redisadapter "github.com/purangoswami2001/hookrelay/internal/adapters/redis"
@@ -70,11 +73,28 @@ func run() error {
 		logger,
 	)
 
-	// leader election / SKIP LOCKED for multi-replica dispatchers
+	// Expose Prometheus metrics for dispatcher on port 9092
+	metricsServer := &http.Server{
+		Addr:    ":9092",
+		Handler: observability.MetricsHandler(),
+	}
+
+	go func() {
+		logger.Info("dispatcher metrics server listening", "addr", ":9092")
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("dispatcher metrics server failed", "error", err)
+		}
+	}()
 
 	logger.Info("HookRelay dispatcher starting")
 	outboxDispatcher.Run(ctx)
+
+	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelMetrics()
+	_ = metricsServer.Shutdown(metricsCtx)
+
 	logger.Info("HookRelay dispatcher stopped")
 
 	return nil
 }
+

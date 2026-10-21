@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -88,6 +90,19 @@ func run() error {
 		logger,
 	)
 
+	// Expose Prometheus metrics for workers on port 9091
+	metricsServer := &http.Server{
+		Addr:    ":9091",
+		Handler: observability.MetricsHandler(),
+	}
+
+	go func() {
+		logger.Info("worker metrics server listening", "addr", ":9091")
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("worker metrics server failed", "error", err)
+		}
+	}()
+
 	logger.Info(
 		"HookRelay worker service starting",
 		"worker_count", cfg.WorkerCount,
@@ -107,8 +122,13 @@ func run() error {
 	<-ctx.Done()
 	logger.Info("draining in-flight deliveries...")
 
+	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelMetrics()
+	_ = metricsServer.Shutdown(metricsCtx)
+
 	wg.Wait()
 	logger.Info("HookRelay worker service stopped")
 
 	return nil
 }
+

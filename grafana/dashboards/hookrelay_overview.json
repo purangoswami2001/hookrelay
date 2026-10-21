@@ -272,7 +272,7 @@
             "uid": "Prometheus"
           },
           "editorMode": "code",
-          "expr": "hookrelay_deliveries_replayed_total or vector(0)",
+          "expr": "sum(hookrelay_deliveries_replayed_total) or vector(0)",
           "instant": false,
           "range": true,
           "refId": "A"
